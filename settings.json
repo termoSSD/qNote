@@ -1,0 +1,7 @@
+{
+  "theme": "Dark",
+  "opacity": 1.0,
+  "font_size": 14,
+  "always_on_top": false,
+  "db_path": "notes.json"
+}
