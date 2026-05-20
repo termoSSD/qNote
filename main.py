@@ -7,10 +7,10 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QHBoxLayout,
     QSystemTrayIcon, QMenu, QInputDialog, QDialog,
     QFormLayout, QSlider, QComboBox, QSpinBox,
-    QCheckBox, QFileDialog, QLabel
+    QCheckBox, QFileDialog, QLabel, QFontComboBox
 )
 from PyQt6.QtWidgets import QStyle
-from PyQt6.QtGui import QAction, QCursor
+from PyQt6.QtGui import QAction, QCursor, QFont
 from PyQt6.QtCore import Qt, QEvent
 
 
@@ -18,7 +18,7 @@ class SettingsDialog(QDialog):
     def __init__(self, current_settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ Settings")
-        self.setFixedSize(350, 300)
+        self.setFixedSize(360, 340)
         self.current_settings = current_settings
 
         layout = QFormLayout()
@@ -41,12 +41,18 @@ class SettingsDialog(QDialog):
         self.font_spin.setValue(current_settings.get("font_size", 14))
         layout.addRow("Font Size:", self.font_spin)
 
-        # 4. Завжди зверху
+        # 4. Стиль шрифту (НОВЕ)
+        self.font_combo = QFontComboBox()
+        current_font = QFont(current_settings.get("font_family", "Segoe UI"))
+        self.font_combo.setCurrentFont(current_font)
+        layout.addRow("Font Family:", self.font_combo)
+
+        # 5. Завжди зверху
         self.on_top_check = QCheckBox()
         self.on_top_check.setChecked(current_settings.get("always_on_top", True))
         layout.addRow("Always on Top:", self.on_top_check)
 
-        # 5. Шлях до JSON файлу з нотатками
+        # 6. Шлях до файлу
         db_layout = QHBoxLayout()
         self.db_label = QLabel(current_settings.get("db_path", "notes.json"))
         db_btn = QPushButton("Browse...")
@@ -80,19 +86,17 @@ class SettingsDialog(QDialog):
             "theme": self.theme_combo.currentText(),
             "opacity": self.opacity_slider.value() / 100.0,
             "font_size": self.font_spin.value(),
+            "font_family": self.font_combo.currentFont().family(),
             "always_on_top": self.on_top_check.isChecked(),
-            "db_path": self.db_label.text()
+            "db_path": self.db_label.text(),
+            "is_pinned": self.current_settings.get("is_pinned", False) # Зберігаємо стан шпильки
         }
 
 
 class NotesApp(QWidget):
     def __init__(self):
         super().__init__()
-
-        # Спочатку завантажуємо налаштування
         self.settings = self.load_settings()
-
-        # Потім завантажуємо нотатки
         self.notes = []
         self.load_notes()
 
@@ -104,8 +108,6 @@ class NotesApp(QWidget):
 
         self.setup_ui()
         self.setup_tray()
-        
-        # Застосовуємо стилі на основі налаштувань
         self.apply_styles()
 
     def load_settings(self):
@@ -113,8 +115,10 @@ class NotesApp(QWidget):
             "theme": "Dark",
             "opacity": 0.9,
             "font_size": 14,
+            "font_family": "Segoe UI",
             "always_on_top": True,
-            "db_path": "notes.json"
+            "db_path": "notes.json",
+            "is_pinned": False
         }
         if os.path.exists("settings.json"):
             with open("settings.json", "r", encoding="utf-8") as f:
@@ -136,8 +140,22 @@ class NotesApp(QWidget):
         self.container = QWidget()
         layout = QVBoxLayout()
 
-        title = QPushButton("📌 qNotes")
-        title.setEnabled(False)
+        # --- Заголовок з кнопкою закріплення (НОВЕ) ---
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(5, 0, 5, 0)
+        
+        is_pinned = self.settings.get("is_pinned", False)
+        self.pin_btn = QPushButton("📌" if is_pinned else "📍")
+        self.pin_btn.setToolTip("Toggle Pin to screen")
+        self.pin_btn.setFixedSize(36, 36)
+        self.pin_btn.clicked.connect(self.toggle_pin)
+
+        self.title_lbl = QLabel("qNotes")
+        
+        header_layout.addWidget(self.pin_btn)
+        header_layout.addWidget(self.title_lbl)
+        header_layout.addStretch()
+        # ----------------------------------------------
 
         self.list_widget = QListWidget()
         self.refresh_notes()
@@ -156,13 +174,12 @@ class NotesApp(QWidget):
         buttons.addWidget(delete_btn)
         buttons.addWidget(edit_btn)
 
-        layout.addWidget(title)
+        layout.addLayout(header_layout)
         layout.addWidget(self.list_widget)
         layout.addLayout(buttons)
 
         self.container.setLayout(layout)
         
-        # Налаштування списку
         self.list_widget.itemDoubleClicked.connect(self.edit_note)
         self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.list_widget.model().rowsMoved.connect(self.sync_order_after_drag)
@@ -170,10 +187,21 @@ class NotesApp(QWidget):
         outer.addWidget(self.container)
         self.setLayout(outer)
 
+    def toggle_pin(self):
+        # Метод для перемикання закріплення вікна
+        current_state = self.settings.get("is_pinned", False)
+        new_state = not current_state
+        self.settings["is_pinned"] = new_state
+        self.save_settings()
+        
+        self.pin_btn.setText("📌" if new_state else "📍")
+
     def apply_styles(self):
         theme = self.settings.get("theme", "Dark")
         opacity = self.settings.get("opacity", 0.9)
+        alpha = int(opacity * 255) # Конвертуємо прозорість для Qt
         font_size = self.settings.get("font_size", 14)
+        font_family = self.settings.get("font_family", "Segoe UI")
         always_on_top = self.settings.get("always_on_top", True)
 
         flags = Qt.WindowType.FramelessWindowHint
@@ -186,26 +214,28 @@ class NotesApp(QWidget):
             self.show()
 
         if theme == "Dark":
-            bg_color = f"rgba(32, 32, 32, {opacity})"
+            bg_color = f"rgba(32, 32, 32, {alpha})"
             text_color = "white"
-            item_bg = "rgba(255, 255, 255, 0.06)"
-            item_sel = "rgba(255, 255, 255, 0.12)"
-            btn_bg = "rgba(255, 255, 255, 0.08)"
-            btn_hover = "rgba(255, 255, 255, 0.14)"
+            item_bg = f"rgba(255, 255, 255, {int(0.06 * 255)})"
+            item_sel = f"rgba(255, 255, 255, {int(0.12 * 255)})"
+            btn_bg = f"rgba(255, 255, 255, {int(0.08 * 255)})"
+            btn_hover = f"rgba(255, 255, 255, {int(0.14 * 255)})"
         else: # Light
-            bg_color = f"rgba(240, 240, 240, {opacity})"
+            bg_color = f"rgba(240, 240, 240, {alpha})"
             text_color = "#202020"
-            item_bg = "rgba(0, 0, 0, 0.04)"
-            item_sel = "rgba(0, 0, 0, 0.08)"
-            btn_bg = "rgba(0, 0, 0, 0.05)"
-            btn_hover = "rgba(0, 0, 0, 0.1)"
+            item_bg = f"rgba(0, 0, 0, {int(0.04 * 255)})"
+            item_sel = f"rgba(0, 0, 0, {int(0.08 * 255)})"
+            btn_bg = f"rgba(0, 0, 0, {int(0.05 * 255)})"
+            btn_hover = f"rgba(0, 0, 0, {int(0.1 * 255)})"
 
         self.container.setStyleSheet(f"""
             QWidget {{
                 background-color: {bg_color}; border-radius: 20px;
-                color: {text_color}; font-family: Segoe UI;
+                color: {text_color}; font-family: "{font_family}";
             }}
         """)
+        
+        self.title_lbl.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {text_color}; padding: 5px;")
 
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
@@ -223,12 +253,12 @@ class NotesApp(QWidget):
         """)
 
         for btn in self.findChildren(QPushButton):
-            if btn.text() == "📌 qNotes":
+            if btn == self.pin_btn:
                 btn.setStyleSheet(f"""
                     QPushButton {{
-                        background: transparent; border: none; font-size: 20px;
-                        font-weight: bold; text-align: left; padding: 10px; color: {text_color};
+                        background: transparent; border: none; font-size: 18px; color: {text_color};
                     }}
+                    QPushButton:hover {{ background-color: {btn_hover}; border-radius: 18px; }}
                 """)
             else:
                 btn.setStyleSheet(f"""
@@ -348,11 +378,12 @@ class NotesApp(QWidget):
             self.notes.append(self.list_widget.item(i).text())
         self.save_notes()
 
-    # --- Обробка подій (закриття, клавіші, перетягування мишею) ---
+    # --- Обробка подій ---
 
     def event(self, e):
+        # Якщо вікно втрачає фокус і воно не "закріплене" шпилькою
         if e.type() == QEvent.Type.WindowDeactivate:
-            if not self.is_dialog_open:
+            if not self.is_dialog_open and not self.settings.get("is_pinned", False):
                 self.hide()
         return super().event(e)
 
